@@ -2,7 +2,7 @@ import { createClient } from '@/lib/supabase/server';
 import { calculateAge, diabetesTypeLabel, formatDate, a1cBand } from '@/lib/utils';
 import { logAudit } from '@/lib/audit';
 import { notFound } from 'next/navigation';
-import { ArrowLeft, FileText, Mic } from 'lucide-react';
+import { ArrowLeft, FileText } from 'lucide-react';
 import Link from 'next/link';
 
 export const metadata = { title: 'Patient' };
@@ -43,13 +43,11 @@ export default async function PatientDetailPage({ params }: { params: { id: stri
       .select('id, encounter_type, status, signed_at, scheduled_at, chief_complaint')
       .eq('patient_id', params.id)
       .is('deleted_at', null)
-      .order('scheduled_at', { ascending: false })
+      .order('scheduled_at', { ascending: false, nullsFirst: false })
       .limit(5),
   ]);
 
-  if (error || !patient) {
-    return notFound();
-  }
+  if (error || !patient) return notFound();
 
   if (user) {
     await logAudit({
@@ -83,20 +81,16 @@ export default async function PatientDetailPage({ params }: { params: { id: stri
           </div>
           {patient.primary_provider && (
             <p className="text-xs text-muted-foreground">
-              PCP: {(patient.primary_provider as any).full_name}{' '}
-              {(patient.primary_provider as any).credentials && (<span>· {(patient.primary_provider as any).credentials}</span>)}
+              PCP: {(patient.primary_provider as any).full_name}
+              {(patient.primary_provider as any).credentials && (<span> · {(patient.primary_provider as any).credentials}</span>)}
             </p>
           )}
         </div>
         <div className="flex items-center gap-3">
-          <button className="inline-flex items-center gap-2 h-10 px-4 rounded-full border border-input bg-card text-sm font-medium hover:bg-muted transition-colors">
-            <Mic className="h-4 w-4" />
-            Record visit
-          </button>
-          <button className="inline-flex items-center gap-2 h-10 px-5 rounded-full bg-primary text-primary-foreground text-sm font-medium hover:bg-accent transition-colors">
+          <Link href={`/app/encounters/new?patient=${patient.id}`} className="inline-flex items-center gap-2 h-10 px-5 rounded-full bg-primary text-primary-foreground text-sm font-medium hover:bg-accent transition-colors">
             <FileText className="h-4 w-4" />
             New encounter
-          </button>
+          </Link>
         </div>
       </header>
 
@@ -106,7 +100,7 @@ export default async function PatientDetailPage({ params }: { params: { id: stri
         </MetricCard>
         <MetricCard label="Time in Range (14d)" value="—" sub="CGM not connected" tone="muted" />
         <MetricCard label="Active medications" value={meds?.length ?? 0} sub={`${meds?.filter((m) => m.is_diabetes_med).length ?? 0} diabetes`} />
-        <MetricCard label="Last visit" value={encounters?.[0] ? formatDate(encounters[0].signed_at ?? encounters[0].scheduled_at) : 'None'} sub={encounters?.[0]?.encounter_type ?? '—'} />
+        <MetricCard label="Last visit" value={encounters?.[0] ? formatDate(encounters[0].signed_at ?? encounters[0].scheduled_at) : 'None'} sub={encounters?.[0]?.encounter_type?.replace('_', ' ') ?? '—'} />
       </div>
 
       <div className="grid lg:grid-cols-3 gap-6">
@@ -145,7 +139,7 @@ export default async function PatientDetailPage({ params }: { params: { id: stri
                     {m.brand_name ? `${m.brand_name} (${m.name})` : m.name}
                     {m.is_diabetes_med && (<span className="ml-2 clinical-badge clinical-badge-good">DM</span>)}
                   </div>
-                  <div className="text-xs text-muted-foreground mt-1 font-mono">{m.dose} · {m.route} · {m.frequency}</div>
+                  <div className="text-xs text-muted-foreground mt-1 font-mono">{[m.dose, m.route, m.frequency].filter(Boolean).join(' · ')}</div>
                 </li>
               ))}
             </ul>
@@ -160,14 +154,18 @@ export default async function PatientDetailPage({ params }: { params: { id: stri
         ) : (
           <ul className="divide-y divide-border">
             {encounters.map((e) => (
-              <li key={e.id} className="px-6 py-4 hover:bg-muted/30 transition-colors">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="font-medium capitalize">{e.encounter_type.replace('_', ' ')}</div>
-                    <div className="text-xs text-muted-foreground mt-0.5">{e.chief_complaint ?? 'No chief complaint recorded'} · {formatDate(e.signed_at ?? e.scheduled_at)}</div>
+              <li key={e.id}>
+                <Link href={`/app/encounters/${e.id}`} className="block px-6 py-4 hover:bg-muted/30 transition-colors">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="font-medium capitalize">{e.encounter_type.replace(/_/g, ' ')}</div>
+                      <div className="text-xs text-muted-foreground mt-0.5">
+                        {e.chief_complaint ?? 'No chief complaint recorded'} · {formatDate(e.signed_at ?? e.scheduled_at)}
+                      </div>
+                    </div>
+                    <span className={`clinical-badge clinical-badge-${e.status === 'signed' ? 'good' : 'borderline'} capitalize`}>{e.status.replace('_', ' ')}</span>
                   </div>
-                  <span className={`clinical-badge clinical-badge-${e.status === 'signed' ? 'good' : 'borderline'} capitalize`}>{e.status}</span>
-                </div>
+                </Link>
               </li>
             ))}
           </ul>
