@@ -5,28 +5,31 @@ import { z } from 'zod';
 
 const ThresholdSchema = z.object({
   patient_id: z.string().uuid(),
-  low_threshold: z.number().int().min(40).max(100),
-  critical_low_threshold: z.number().int().min(30).max(70),
-  high_threshold: z.number().int().min(140).max(300),
-  critical_high_threshold: z.number().int().min(200).max(600),
-  target_low: z.number().int().min(50).max(100),
-  target_high: z.number().int().min(140).max(250),
-  alert_on_nocturnal_hypo: z.boolean().default(true),
-  alert_on_postprandial_spike: z.boolean().default(true),
-  alert_on_dawn_phenomenon: z.boolean().default(false),
-  notes: z.string().max(500).optional(),
+  target_low: z.number().min(40).max(120).optional(),
+  target_high: z.number().min(120).max(300).optional(),
+  urgent_low: z.number().min(40).max(80).optional(),
+  urgent_high: z.number().min(200).max(400).optional(),
+  alert_nocturnal_hypo: z.boolean().optional(),
+  alert_postprandial_spike: z.boolean().optional(),
+  alert_dawn_phenomenon: z.boolean().optional(),
+  alert_high_variability: z.boolean().optional(),
+  cv_threshold: z.number().min(15).max(80).optional(),
 });
 
+/**
+ * POST /api/cgm/thresholds
+ * Upsert per-patient CGM thresholds. Replaces existing if any.
+ */
 export async function POST(request: Request) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
 
-  let payload;
+  let body;
   try {
-    payload = ThresholdSchema.parse(await request.json());
-  } catch (e: any) {
-    return NextResponse.json({ error: 'Invalid input', detail: e.message }, { status: 400 });
+    body = ThresholdSchema.parse(await request.json());
+  } catch (err) {
+    return NextResponse.json({ error: 'Invalid input', details: (err as Error).message }, { status: 400 });
   }
 
   const { data: profile } = await supabase
@@ -36,55 +39,38 @@ export async function POST(request: Request) {
     .single();
   if (!profile) return NextResponse.json({ error: 'No profile' }, { status: 403 });
 
-  const { data: patient } = await supabase
-    .from('patients')
-    .select('id')
-    .eq('id', payload.patient_id)
-    .single();
-  if (!patient) return NextResponse.json({ error: 'Patient not accessible' }, { status: 404 });
-
-  if (payload.critical_low_threshold >= payload.low_threshold) {
-    return NextResponse.json({ error: 'Critical low must be below low threshold' }, { status: 422 });
+  // Validate target_low < target_high, urgent_low < target_low, etc.
+  const tl = body.target_low ?? 70;
+  const th = body.target_high ?? 180;
+  const ul = body.urgent_low ?? 54;
+  const uh = body.urgent_high ?? 250;
+  if (ul >= tl || tl >= th || th >= uh) {
+    return NextResponse.json({ error: 'Threshold ordering invalid: urgent_low < target_low < target_high < urgent_high' }, { status: 400 });
   }
-  if (payload.target_low > payload.target_high) {
-    return NextResponse.json({ error: 'Target low must be below target high' }, { status: 422 });
-  }
-
-  const { data: existing } = await supabase
-    .from('cgm_alert_thresholds')
-    .select('id')
-    .eq('patient_id', payload.patient_id)
-    .is('deleted_at', null)
-    .maybeSingle();
 
   const upsertPayload = {
-    patient_id: payload.patient_id,
     organization_id: profile.organization_id,
-    low_threshold: payload.low_threshold,
-    critical_low_threshold: payload.critical_low_threshold,
-    high_threshold: payload.high_threshold,
-    critical_high_threshold: payload.critical_high_threshold,
-    target_low: payload.target_low,
-    target_high: payload.target_high,
-    alert_on_nocturnal_hypo: payload.alert_on_nocturnal_hypo,
-    alert_on_postprandial_spike: payload.alert_on_postprandial_spike,
-    alert_on_dawn_phenomenon: payload.alert_on_dawn_phenomenon,
-    notes: payload.notes ?? null,
+    patient_id: body.patient_id,
+    target_low: tl,
+    target_high: th,
+    urgent_low: ul,
+    urgent_high: uh,
+    alert_nocturnal_hypo: body.alert_nocturnal_hypo ?? true,
+    alert_postprandial_spike: body.alert_postprandial_spike ?? true,
+    alert_dawn_phenomenon: body.alert_dawn_phenomenon ?? true,
+    alert_high_variability: body.alert_high_variability ?? true,
+    cv_threshold: body.cv_threshold ?? 36,
+    set_by: user.id,
   };
 
-  let result;
-  if (existing) {
-    result = await supabase
-      .from('cgm_alert_thresholds')
-      .update(upsertPayload)
-      .eq('id', existing.id);
-  } else {
-    result = await supabase
-      .from('cgm_alert_thresholds')
-      .insert(upsertPayload);
-  }
+  const { data, error } = await supabase
+    .from('cgm_thresholds')
+    .upsert(upsertPayload, { onConflict: 'patient_id' })
+    .select('id')
+    .single();
 
-  if (result.error) {
+  if (error) {
+    console.error('[thresholds] upsert failed', error);
     return NextResponse.json({ error: 'Could not save thresholds' }, { status: 500 });
   }
 
@@ -92,28 +78,30 @@ export async function POST(request: Request) {
     organizationId: profile.organization_id,
     userId: user.id,
     action: 'update',
-    resourceType: 'cgm_alert_thresholds',
-    patientId: payload.patient_id,
-    metadata: { updated: !!existing },
+    resourceType: 'cgm_thresholds',
+    resourceId: data.id,
+    patientId: body.patient_id,
   });
 
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, id: data.id });
 }
 
+/**
+ * GET /api/cgm/thresholds?patient_id=...
+ */
 export async function GET(request: Request) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
 
-  const url = new URL(request.url);
-  const patientId = url.searchParams.get('patient_id');
+  const { searchParams } = new URL(request.url);
+  const patientId = searchParams.get('patient_id');
   if (!patientId) return NextResponse.json({ error: 'patient_id required' }, { status: 400 });
 
   const { data } = await supabase
-    .from('cgm_alert_thresholds')
+    .from('cgm_thresholds')
     .select('*')
     .eq('patient_id', patientId)
-    .is('deleted_at', null)
     .maybeSingle();
 
   return NextResponse.json({ thresholds: data });

@@ -1,101 +1,136 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { createServiceClient } from '@/lib/supabase/server';
 import { exchangeCodeForTokens } from '@/lib/cgm/dexcom-client';
+import { encryptToken } from '@/lib/cgm/encryption';
+import { syncConnection } from '@/lib/cgm/sync-worker';
 import { logAudit } from '@/lib/audit';
 
+export const runtime = 'nodejs';
+
+/**
+ * GET /api/cgm/dexcom/callback?code=...&state=...
+ *
+ * Dexcom redirects here after the patient authorizes.
+ * - Validates state
+ * - Exchanges code for tokens
+ * - Persists connection (encrypted tokens)
+ * - Kicks off initial 90-day sync in background (best effort)
+ * - Redirects to patient page with success or error message
+ */
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get('code');
-  const stateParam = searchParams.get('state');
-  const error = searchParams.get('error');
+  const state = searchParams.get('state');
+  const errorParam = searchParams.get('error');
 
-  if (error) {
-    return NextResponse.redirect(`${origin}/app/cgm?error=${encodeURIComponent(error)}`);
-  }
-  if (!code || !stateParam) {
-    return NextResponse.redirect(`${origin}/app/cgm?error=missing_params`);
-  }
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? origin;
 
-  let state: any;
-  try {
-    state = JSON.parse(Buffer.from(stateParam, 'base64url').toString('utf-8'));
-  } catch {
-    return NextResponse.redirect(`${origin}/app/cgm?error=invalid_state`);
+  if (errorParam) {
+    return NextResponse.redirect(`${appUrl}/app/cgm?error=${encodeURIComponent(errorParam)}`);
   }
-
-  if (!state.ts || Date.now() - state.ts > 10 * 60 * 1000) {
-    return NextResponse.redirect(`${origin}/app/cgm?error=state_expired`);
-  }
-
-  let tokens;
-  try {
-    tokens = await exchangeCodeForTokens(code);
-  } catch (e: any) {
-    return NextResponse.redirect(`${origin}/app/cgm?error=${encodeURIComponent('token_exchange_failed')}`);
+  if (!code || !state) {
+    return NextResponse.redirect(`${appUrl}/app/cgm?error=missing_params`);
   }
 
   const admin = createServiceClient();
-  const { data: encAccess } = await admin.rpc('encrypt_cgm_token' as any, { plaintext: tokens.access_token });
-  const { data: encRefresh } = await admin.rpc('encrypt_cgm_token' as any, { plaintext: tokens.refresh_token });
 
-  const expiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString();
+  // 1. Validate state
+  const { data: stateRow } = await admin
+    .from('cgm_oauth_states')
+    .select('*')
+    .eq('state', state)
+    .single();
 
+  if (!stateRow) {
+    return NextResponse.redirect(`${appUrl}/app/cgm?error=invalid_state`);
+  }
+  if (new Date(stateRow.expires_at) < new Date()) {
+    await admin.from('cgm_oauth_states').delete().eq('state', state);
+    return NextResponse.redirect(`${appUrl}/app/cgm?error=state_expired`);
+  }
+
+  // Consume state (one-shot)
+  await admin.from('cgm_oauth_states').delete().eq('state', state);
+
+  // 2. Exchange code for tokens
+  let tokens;
+  try {
+    tokens = await exchangeCodeForTokens(code);
+  } catch (err) {
+    console.error('[oauth callback] token exchange failed', err);
+    return NextResponse.redirect(
+      `${appUrl}/app/patients/${stateRow.patient_id}?cgm_error=${encodeURIComponent((err as Error).message)}`
+    );
+  }
+
+  // 3. Persist connection
+  const expiresAt = new Date(Date.now() + tokens.expires_in * 1000);
+
+  // Upsert: same patient + device replaces previous connection
   const { data: existing } = await admin
     .from('cgm_connections')
     .select('id')
-    .eq('patient_id', state.patient_id)
-    .eq('device', state.device)
-    .is('deleted_at', null)
+    .eq('patient_id', stateRow.patient_id)
+    .eq('device', stateRow.device)
     .maybeSingle();
 
   let connectionId: string;
-
   if (existing) {
-    const { error: updateErr } = await admin
+    await admin
       .from('cgm_connections')
       .update({
-        encrypted_access_token: encAccess,
-        encrypted_refresh_token: encRefresh,
-        token_expires_at: expiresAt,
+        encrypted_access_token: encryptToken(tokens.access_token),
+        encrypted_refresh_token: encryptToken(tokens.refresh_token),
+        token_expires_at: expiresAt.toISOString(),
         is_active: true,
         sync_status: 'idle',
-        last_sync_error: null,
+        last_error: null,
+        consecutive_failures: 0,
+        deleted_at: null,
       })
       .eq('id', existing.id);
-    if (updateErr) {
-      return NextResponse.redirect(`${origin}/app/cgm?error=db_update_failed`);
-    }
     connectionId = existing.id;
   } else {
-    const { data: inserted, error: insertErr } = await admin
+    const { data: inserted, error: insErr } = await admin
       .from('cgm_connections')
       .insert({
-        patient_id: state.patient_id,
-        organization_id: state.org_id,
-        device: state.device,
-        encrypted_access_token: encAccess,
-        encrypted_refresh_token: encRefresh,
-        token_expires_at: expiresAt,
+        patient_id: stateRow.patient_id,
+        organization_id: stateRow.organization_id,
+        device: stateRow.device,
+        encrypted_access_token: encryptToken(tokens.access_token),
+        encrypted_refresh_token: encryptToken(tokens.refresh_token),
+        token_expires_at: expiresAt.toISOString(),
         is_active: true,
-        sync_status: 'idle',
       })
       .select('id')
       .single();
-    if (insertErr || !inserted) {
-      return NextResponse.redirect(`${origin}/app/cgm?error=db_insert_failed`);
+
+    if (insErr || !inserted) {
+      console.error('[oauth callback] insert connection failed', insErr);
+      return NextResponse.redirect(
+        `${appUrl}/app/patients/${stateRow.patient_id}?cgm_error=insert_failed`
+      );
     }
     connectionId = inserted.id;
   }
 
+  // 4. Audit
   await logAudit({
-    organizationId: state.org_id,
-    userId: state.user_id,
+    organizationId: stateRow.organization_id,
+    userId: stateRow.user_id,
     action: 'create',
     resourceType: 'cgm_connection',
     resourceId: connectionId,
-    patientId: state.patient_id,
-    metadata: { device: state.device, event: 'oauth_completed' },
+    patientId: stateRow.patient_id,
+    metadata: { device: stateRow.device, event: 'oauth_complete' },
   });
 
-  return NextResponse.redirect(`${origin}/app/patients/${state.patient_id}?cgm_connected=1`);
+  // 5. Kick off initial 90-day sync (don't await beyond redirect; fire-and-log)
+  syncConnection({ connectionId, triggeredBy: 'initial', windowDays: 90 })
+    .then((r) => console.log('[oauth callback] initial sync:', r))
+    .catch((e) => console.error('[oauth callback] initial sync failed', e));
+
+  return NextResponse.redirect(
+    `${appUrl}/app/patients/${stateRow.patient_id}?cgm_connected=1`
+  );
 }
