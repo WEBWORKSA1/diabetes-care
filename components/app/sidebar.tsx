@@ -10,8 +10,8 @@ const nav = [
   { label: 'Patients', href: '/app/patients', icon: Users },
   { label: 'Schedule', href: '/app/schedule', icon: Calendar },
   { label: 'Encounters', href: '/app/encounters', icon: FileText },
-  { label: 'Labs', href: '/app/labs', icon: FlaskConical, badge: 'New' },
-  { label: 'CGM', href: '/app/cgm', icon: Activity },
+  { label: 'Labs', href: '/app/labs', icon: FlaskConical },
+  { label: 'CGM', href: '/app/cgm', icon: Activity, badge: 'New' },
   { label: 'AI Scribe', href: '/app/scribe', icon: Mic },
 ];
 

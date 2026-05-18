@@ -7,6 +7,8 @@ import Link from 'next/link';
 import { A1cSparkline } from '@/components/charts/a1c-sparkline';
 import { A1cTrendChart } from '@/components/charts/a1c-trend-chart';
 import { GlucoseDashboard } from '@/components/charts/glucose-dashboard';
+import { AlertsPanel } from '@/components/cgm/alerts-panel';
+import { rangePreset } from '@/lib/cgm/analytics';
 
 export const metadata = { title: 'Patient' };
 
@@ -14,11 +16,18 @@ export default async function PatientDetailPage({ params }: { params: { id: stri
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
 
+  // Pre-compute 90-day CGM lookback for dashboard
+  const cgmRange = rangePreset('90d');
+
   const [
     { data: patient, error },
     { data: a1cs },
     { data: meds },
     { data: encounters },
+    { data: cgmConnection },
+    { data: cgmReadings },
+    { data: cgmAlerts },
+    { data: thresholds },
   ] = await Promise.all([
     supabase
       .from('patients')
@@ -48,6 +57,35 @@ export default async function PatientDetailPage({ params }: { params: { id: stri
       .is('deleted_at', null)
       .order('scheduled_at', { ascending: false, nullsFirst: false })
       .limit(5),
+    supabase
+      .from('cgm_connections')
+      .select('id, device, is_active, last_synced_at, token_expires_at, sync_status, last_error, consecutive_failures')
+      .eq('patient_id', params.id)
+      .eq('is_active', true)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    supabase
+      .from('cgm_readings')
+      .select('recorded_at, glucose_mg_dl, trend')
+      .eq('patient_id', params.id)
+      .gte('recorded_at', cgmRange.start.toISOString())
+      .lte('recorded_at', cgmRange.end.toISOString())
+      .order('recorded_at', { ascending: true })
+      .limit(30000),
+    supabase
+      .from('cgm_alerts')
+      .select('id, alert_type, severity, title, description, detected_at, observation_window_start, observation_window_end, context, acknowledged_at, resolved_at')
+      .eq('patient_id', params.id)
+      .is('resolved_at', null)
+      .order('detected_at', { ascending: false })
+      .limit(20),
+    supabase
+      .from('cgm_thresholds')
+      .select('*')
+      .eq('patient_id', params.id)
+      .maybeSingle(),
   ]);
 
   if (error || !patient) return notFound();
@@ -66,7 +104,6 @@ export default async function PatientDetailPage({ params }: { params: { id: stri
   const latestA1c = a1cs?.[0];
   const band = latestA1c ? a1cBand(Number(latestA1c.value)) : null;
 
-  // Compute A1C delta (latest vs second-most-recent)
   let a1cDelta: { value: number; direction: 'up' | 'down' | 'stable' } | null = null;
   if (a1cs && a1cs.length >= 2) {
     const delta = Number(a1cs[0].value) - Number(a1cs[1].value);
@@ -144,7 +181,12 @@ export default async function PatientDetailPage({ params }: { params: { id: stri
             )}
           </div>
         </MetricCard>
-        <MetricCard label="Time in Range (14d)" value="—" sub="CGM not connected" tone="muted" />
+        <MetricCard
+          label="Time in Range (14d)"
+          value={cgmConnection ? '—' : '—'}
+          sub={cgmConnection ? 'See dashboard below' : 'CGM not connected'}
+          tone={cgmConnection ? 'default' : 'muted'}
+        />
         <MetricCard label="Active medications" value={meds?.length ?? 0} sub={`${meds?.filter((m) => m.is_diabetes_med).length ?? 0} diabetes`} />
         <MetricCard label="Last visit" value={encounters?.[0] ? formatDate(encounters[0].signed_at ?? encounters[0].scheduled_at) : 'None'} sub={encounters?.[0]?.encounter_type?.replace('_', ' ') ?? '—'} />
       </div>
@@ -185,7 +227,14 @@ export default async function PatientDetailPage({ params }: { params: { id: stri
         </section>
       </div>
 
-      <GlucoseDashboard patientId={patient.id} hasCgm={false} />
+      {cgmAlerts && cgmAlerts.length > 0 && <AlertsPanel alerts={cgmAlerts as any} />}
+
+      <GlucoseDashboard
+        patientId={patient.id}
+        connection={cgmConnection as any}
+        readings={(cgmReadings ?? []) as any}
+        thresholds={thresholds}
+      />
 
       <section className="bg-card rounded-2xl border border-border">
         <header className="flex items-center justify-between px-6 py-5 border-b border-border"><h2 className="font-display text-xl">Recent Encounters</h2></header>
