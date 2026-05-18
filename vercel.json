@@ -3,6 +3,10 @@
     {
       "path": "/api/cgm/cron",
       "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/scribe/cron",
+      "schedule": "15 * * * *"
     }
   ]
 }
