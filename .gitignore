@@ -2,6 +2,7 @@
 node_modules/
 .pnp
 .pnp.js
+.yarn/install-state.gz
 
 # Build outputs
 .next/
@@ -39,6 +40,10 @@ Thumbs.db
 # Supabase
 supabase/.branches
 supabase/.temp
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
 
 # Misc
 *.pem

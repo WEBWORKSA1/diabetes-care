@@ -1,0 +1,75 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 38 35% 96%;
+    --foreground: 213 60% 10%;
+    --card: 0 0% 100%;
+    --card-foreground: 213 60% 10%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 213 60% 10%;
+    --primary: 213 60% 10%;
+    --primary-foreground: 38 35% 96%;
+    --secondary: 38 25% 92%;
+    --secondary-foreground: 213 60% 10%;
+    --muted: 38 25% 92%;
+    --muted-foreground: 213 15% 40%;
+    --accent: 0 64% 53%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 64% 53%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 38 20% 80%;
+    --input: 38 20% 80%;
+    --ring: 213 60% 10%;
+    --radius: 0.75rem;
+    --clinical-inrange: 145 50% 40%;
+    --clinical-high: 0 64% 53%;
+    --clinical-low: 38 80% 60%;
+    --clinical-critical: 348 80% 45%;
+  }
+  .dark {
+    --background: 213 50% 8%;
+    --foreground: 38 30% 94%;
+    --card: 213 45% 12%;
+    --card-foreground: 38 30% 94%;
+    --popover: 213 45% 12%;
+    --popover-foreground: 38 30% 94%;
+    --primary: 38 30% 94%;
+    --primary-foreground: 213 60% 10%;
+    --secondary: 213 30% 18%;
+    --secondary-foreground: 38 30% 94%;
+    --muted: 213 30% 18%;
+    --muted-foreground: 213 15% 65%;
+    --accent: 0 64% 60%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 64% 53%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 213 30% 22%;
+    --input: 213 30% 22%;
+    --ring: 38 30% 94%;
+  }
+}
+
+@layer base {
+  * { @apply border-border; }
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: hsl(var(--muted-foreground) / 0.25); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground) / 0.4); }
+}
+
+@layer components {
+  .clinical-badge { @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium; }
+  .clinical-badge-good { @apply bg-green-50 text-green-900 dark:bg-green-950 dark:text-green-100; }
+  .clinical-badge-borderline { @apply bg-amber-50 text-amber-900 dark:bg-amber-950 dark:text-amber-100; }
+  .clinical-badge-high { @apply bg-red-50 text-red-900 dark:bg-red-950 dark:text-red-100; }
+  .clinical-badge-critical { @apply bg-red-100 text-red-950 ring-1 ring-red-300 dark:bg-red-950 dark:text-red-50; }
+}
