@@ -7,6 +7,10 @@
     {
       "path": "/api/scribe/cron",
       "schedule": "15 * * * *"
+    },
+    {
+      "path": "/api/sms/cron",
+      "schedule": "*/5 * * * *"
     }
   ]
 }
