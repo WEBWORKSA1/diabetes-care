@@ -2,7 +2,7 @@ import { createClient } from '@/lib/supabase/server';
 import { calculateAge, diabetesTypeLabel, formatDate, a1cBand } from '@/lib/utils';
 import { logAudit } from '@/lib/audit';
 import { notFound } from 'next/navigation';
-import { ArrowLeft, FileText, TrendingUp, TrendingDown, Minus } from 'lucide-react';
+import { ArrowLeft, FileText, Mic, TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import Link from 'next/link';
 import { A1cSparkline } from '@/components/charts/a1c-sparkline';
 import { A1cTrendChart } from '@/components/charts/a1c-trend-chart';
@@ -16,7 +16,6 @@ export default async function PatientDetailPage({ params }: { params: { id: stri
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
 
-  // Pre-compute 90-day CGM lookback for dashboard
   const cgmRange = rangePreset('90d');
 
   const [
@@ -32,72 +31,49 @@ export default async function PatientDetailPage({ params }: { params: { id: stri
     supabase
       .from('patients')
       .select('*, primary_provider:users!patients_primary_provider_id_fkey(id, full_name, credentials)')
-      .eq('id', params.id)
-      .is('deleted_at', null)
-      .single(),
+      .eq('id', params.id).is('deleted_at', null).single(),
     supabase
       .from('lab_values')
       .select('id, value, unit, collected_at, reference_high')
-      .eq('patient_id', params.id)
-      .eq('test_name', 'a1c')
-      .is('deleted_at', null)
-      .order('collected_at', { ascending: false })
-      .limit(12),
+      .eq('patient_id', params.id).eq('test_name', 'a1c').is('deleted_at', null)
+      .order('collected_at', { ascending: false }).limit(12),
     supabase
       .from('medications')
       .select('id, name, brand_name, dose, route, frequency, is_diabetes_med')
-      .eq('patient_id', params.id)
-      .is('discontinued_at', null)
-      .is('deleted_at', null)
+      .eq('patient_id', params.id).is('discontinued_at', null).is('deleted_at', null)
       .order('is_diabetes_med', { ascending: false }),
     supabase
       .from('encounters')
       .select('id, encounter_type, status, signed_at, scheduled_at, chief_complaint')
-      .eq('patient_id', params.id)
-      .is('deleted_at', null)
-      .order('scheduled_at', { ascending: false, nullsFirst: false })
-      .limit(5),
+      .eq('patient_id', params.id).is('deleted_at', null)
+      .order('scheduled_at', { ascending: false, nullsFirst: false }).limit(5),
     supabase
       .from('cgm_connections')
       .select('id, device, is_active, last_synced_at, token_expires_at, sync_status, last_error, consecutive_failures')
-      .eq('patient_id', params.id)
-      .eq('is_active', true)
-      .is('deleted_at', null)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle(),
+      .eq('patient_id', params.id).eq('is_active', true).is('deleted_at', null)
+      .order('created_at', { ascending: false }).limit(1).maybeSingle(),
     supabase
       .from('cgm_readings')
       .select('recorded_at, glucose_mg_dl, trend')
       .eq('patient_id', params.id)
       .gte('recorded_at', cgmRange.start.toISOString())
       .lte('recorded_at', cgmRange.end.toISOString())
-      .order('recorded_at', { ascending: true })
-      .limit(30000),
+      .order('recorded_at', { ascending: true }).limit(30000),
     supabase
       .from('cgm_alerts')
       .select('id, alert_type, severity, title, description, detected_at, observation_window_start, observation_window_end, context, acknowledged_at, resolved_at')
-      .eq('patient_id', params.id)
-      .is('resolved_at', null)
-      .order('detected_at', { ascending: false })
-      .limit(20),
+      .eq('patient_id', params.id).is('resolved_at', null)
+      .order('detected_at', { ascending: false }).limit(20),
     supabase
-      .from('cgm_thresholds')
-      .select('*')
-      .eq('patient_id', params.id)
-      .maybeSingle(),
+      .from('cgm_thresholds').select('*').eq('patient_id', params.id).maybeSingle(),
   ]);
 
   if (error || !patient) return notFound();
 
   if (user) {
     await logAudit({
-      organizationId: patient.organization_id,
-      userId: user.id,
-      action: 'read',
-      resourceType: 'patient',
-      resourceId: patient.id,
-      patientId: patient.id,
+      organizationId: patient.organization_id, userId: user.id, action: 'read',
+      resourceType: 'patient', resourceId: patient.id, patientId: patient.id,
     });
   }
 
@@ -112,10 +88,7 @@ export default async function PatientDetailPage({ params }: { params: { id: stri
     else a1cDelta = { value: Math.abs(delta), direction: 'down' };
   }
 
-  const sparklineData = (a1cs ?? []).map((a) => ({
-    collected_at: a.collected_at,
-    value: Number(a.value),
-  }));
+  const sparklineData = (a1cs ?? []).map((a) => ({ collected_at: a.collected_at, value: Number(a.value) }));
 
   return (
     <div className="space-y-8">
@@ -144,6 +117,10 @@ export default async function PatientDetailPage({ params }: { params: { id: stri
           <Link href={`/app/patients/${patient.id}/labs`} className="inline-flex items-center gap-2 h-10 px-4 rounded-full border border-input bg-card text-sm font-medium hover:bg-muted transition-colors">
             All labs
           </Link>
+          <Link href={`/app/scribe/new?patient=${patient.id}`} className="inline-flex items-center gap-2 h-10 px-4 rounded-full border border-accent/30 bg-accent/5 text-accent text-sm font-medium hover:bg-accent/10 transition-colors">
+            <Mic className="h-4 w-4" />
+            AI Scribe
+          </Link>
           <Link href={`/app/encounters/new?patient=${patient.id}`} className="inline-flex items-center gap-2 h-10 px-5 rounded-full bg-primary text-primary-foreground text-sm font-medium hover:bg-accent transition-colors">
             <FileText className="h-4 w-4" />
             New encounter
@@ -152,12 +129,7 @@ export default async function PatientDetailPage({ params }: { params: { id: stri
       </header>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <MetricCard
-          label="Latest A1C"
-          value={latestA1c ? `${latestA1c.value}%` : '—'}
-          sub={latestA1c ? formatDate(latestA1c.collected_at) : 'No data'}
-          tone={band?.tone}
-        >
+        <MetricCard label="Latest A1C" value={latestA1c ? `${latestA1c.value}%` : '—'} sub={latestA1c ? formatDate(latestA1c.collected_at) : 'No data'} tone={band?.tone}>
           <div className="space-y-2 mt-2">
             {band && <div className="text-xs text-muted-foreground">{band.label}</div>}
             {a1cDelta && (
@@ -165,28 +137,15 @@ export default async function PatientDetailPage({ params }: { params: { id: stri
                 {a1cDelta.direction === 'up' && <TrendingUp className="h-3 w-3 text-red-600" />}
                 {a1cDelta.direction === 'down' && <TrendingDown className="h-3 w-3 text-green-600" />}
                 {a1cDelta.direction === 'stable' && <Minus className="h-3 w-3 text-muted-foreground" />}
-                <span className={
-                  a1cDelta.direction === 'up' ? 'text-red-700 dark:text-red-300' :
-                  a1cDelta.direction === 'down' ? 'text-green-700 dark:text-green-300' :
-                  'text-muted-foreground'
-                }>
+                <span className={a1cDelta.direction === 'up' ? 'text-red-700 dark:text-red-300' : a1cDelta.direction === 'down' ? 'text-green-700 dark:text-green-300' : 'text-muted-foreground'}>
                   {a1cDelta.direction === 'stable' ? 'Stable' : `${a1cDelta.direction === 'up' ? '+' : '-'}${a1cDelta.value.toFixed(1)}% vs prior`}
                 </span>
               </div>
             )}
-            {sparklineData.length >= 2 && (
-              <div className="-mx-2">
-                <A1cSparkline data={sparklineData} height={40} />
-              </div>
-            )}
+            {sparklineData.length >= 2 && <div className="-mx-2"><A1cSparkline data={sparklineData} height={40} /></div>}
           </div>
         </MetricCard>
-        <MetricCard
-          label="Time in Range (14d)"
-          value={cgmConnection ? '—' : '—'}
-          sub={cgmConnection ? 'See dashboard below' : 'CGM not connected'}
-          tone={cgmConnection ? 'default' : 'muted'}
-        />
+        <MetricCard label="Time in Range (14d)" value="—" sub={cgmConnection ? 'See dashboard below' : 'CGM not connected'} tone={cgmConnection ? 'default' : 'muted'} />
         <MetricCard label="Active medications" value={meds?.length ?? 0} sub={`${meds?.filter((m) => m.is_diabetes_med).length ?? 0} diabetes`} />
         <MetricCard label="Last visit" value={encounters?.[0] ? formatDate(encounters[0].signed_at ?? encounters[0].scheduled_at) : 'None'} sub={encounters?.[0]?.encounter_type?.replace('_', ' ') ?? '—'} />
       </div>
@@ -195,14 +154,7 @@ export default async function PatientDetailPage({ params }: { params: { id: stri
         <section className="lg:col-span-2 bg-card rounded-2xl border border-border">
           <header className="px-6 py-5 border-b border-border flex items-center justify-between">
             <h2 className="font-display text-xl">A1C Trend</h2>
-            {a1cs && a1cs.length > 0 && (
-              <Link
-                href={`/app/patients/${patient.id}/labs`}
-                className="text-xs font-mono uppercase tracking-wider text-muted-foreground hover:text-foreground"
-              >
-                All labs →
-              </Link>
-            )}
+            {a1cs && a1cs.length > 0 && (<Link href={`/app/patients/${patient.id}/labs`} className="text-xs font-mono uppercase tracking-wider text-muted-foreground hover:text-foreground">All labs →</Link>)}
           </header>
           <A1cTrendChart data={sparklineData} target={7.0} height={300} />
         </section>
@@ -229,12 +181,7 @@ export default async function PatientDetailPage({ params }: { params: { id: stri
 
       {cgmAlerts && cgmAlerts.length > 0 && <AlertsPanel alerts={cgmAlerts as any} />}
 
-      <GlucoseDashboard
-        patientId={patient.id}
-        connection={cgmConnection as any}
-        readings={(cgmReadings ?? []) as any}
-        thresholds={thresholds}
-      />
+      <GlucoseDashboard patientId={patient.id} connection={cgmConnection as any} readings={(cgmReadings ?? []) as any} thresholds={thresholds} />
 
       <section className="bg-card rounded-2xl border border-border">
         <header className="flex items-center justify-between px-6 py-5 border-b border-border"><h2 className="font-display text-xl">Recent Encounters</h2></header>

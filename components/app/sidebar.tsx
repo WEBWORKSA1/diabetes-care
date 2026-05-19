@@ -11,8 +11,8 @@ const nav = [
   { label: 'Schedule', href: '/app/schedule', icon: Calendar },
   { label: 'Encounters', href: '/app/encounters', icon: FileText },
   { label: 'Labs', href: '/app/labs', icon: FlaskConical },
-  { label: 'CGM', href: '/app/cgm', icon: Activity, badge: 'New' },
-  { label: 'AI Scribe', href: '/app/scribe', icon: Mic },
+  { label: 'CGM', href: '/app/cgm', icon: Activity },
+  { label: 'AI Scribe', href: '/app/scribe', icon: Mic, badge: 'New' },
 ];
 
 export function Sidebar({ profile }: { profile: any }) {
