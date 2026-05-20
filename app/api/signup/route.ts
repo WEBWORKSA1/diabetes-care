@@ -3,90 +3,115 @@ import { createServiceClient } from '@/lib/supabase/server';
 import { z } from 'zod';
 
 const SignupSchema = z.object({
-  fullName: z.string().min(2).max(120),
+  // Practice
+  practice_name: z.string().min(2).max(200),
+  practice_phone: z.string().max(30).optional(),
+  practice_timezone: z.string().default('America/New_York'),
+  // Owner
+  full_name: z.string().min(2).max(150),
+  credentials: z.string().max(50).optional(),
   email: z.string().email().max(200),
-  practiceName: z.string().min(2).max(200),
-  npi: z.string().regex(/^\d{10}$/).optional().or(z.literal('')),
+  password: z.string().min(8).max(200),
+  npi: z.string().regex(/^\d{10}$/).optional(),
 });
 
-function slugify(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
-}
-
+/**
+ * POST /api/signup
+ * Creates a new organization + owner user.
+ *
+ * Public endpoint — no auth required (this IS the auth bootstrap).
+ * Uses service role to create auth user + insert org/user records.
+ */
 export async function POST(request: Request) {
-  let payload;
+  let body;
   try {
-    payload = SignupSchema.parse(await request.json());
+    body = SignupSchema.parse(await request.json());
   } catch (err) {
-    return NextResponse.json({ error: 'Invalid input' }, { status: 400 });
+    return NextResponse.json({ error: 'Invalid input', details: (err as Error).message }, { status: 400 });
   }
 
   const admin = createServiceClient();
 
-  let slug = slugify(payload.practiceName);
-  let attempt = 0;
-  let orgId: string | null = null;
-  while (attempt < 5 && !orgId) {
-    const trialEnd = new Date();
-    trialEnd.setDate(trialEnd.getDate() + 60);
-    const { data, error } = await admin
-      .from('organizations')
-      .insert({
-        name: payload.practiceName,
-        slug: attempt === 0 ? slug : `${slug}-${attempt}`,
-        plan: 'trial',
-        trial_ends_at: trialEnd.toISOString(),
-      })
-      .select('id')
-      .single();
-    if (data) {
-      orgId = data.id;
-    } else if (error?.code === '23505') {
-      attempt++;
-    } else {
-      return NextResponse.json({ error: 'Could not create practice' }, { status: 500 });
-    }
-  }
-  if (!orgId) return NextResponse.json({ error: 'Practice name taken; try another.' }, { status: 409 });
+  // 1. Check email isn't already in use
+  const { data: existingUser } = await admin
+    .from('users')
+    .select('id')
+    .eq('email', body.email.toLowerCase())
+    .maybeSingle();
 
-  const { data: invite, error: inviteErr } = await admin.auth.admin.inviteUserByEmail(payload.email, {
-    redirectTo: `${process.env.NEXT_PUBLIC_APP_URL}/auth/callback`,
-    data: {
-      full_name: payload.fullName,
-      organization_id: orgId,
-      role: 'owner',
-      npi: payload.npi || null,
+  if (existingUser) {
+    return NextResponse.json({ error: 'An account with this email already exists. Sign in instead.' }, { status: 409 });
+  }
+
+  // 2. Create auth user (Supabase Auth)
+  const { data: authUser, error: authErr } = await admin.auth.admin.createUser({
+    email: body.email.toLowerCase(),
+    password: body.password,
+    email_confirm: true,
+    user_metadata: {
+      full_name: body.full_name,
     },
   });
 
-  if (inviteErr || !invite.user) {
-    await admin.from('organizations').update({ deleted_at: new Date().toISOString() }).eq('id', orgId);
-    return NextResponse.json({ error: inviteErr?.message ?? 'Could not send invite' }, { status: 500 });
+  if (authErr || !authUser?.user) {
+    console.error('[signup] auth user create failed', authErr);
+    return NextResponse.json({ error: 'Could not create account', details: authErr?.message }, { status: 500 });
   }
 
-  const { error: userErr } = await admin.from('users').insert({
-    id: invite.user.id,
-    organization_id: orgId,
-    email: payload.email,
-    full_name: payload.fullName,
-    role: 'owner',
-    npi: payload.npi || null,
-    is_active: true,
-  });
+  const userId = authUser.user.id;
 
-  if (userErr) {
-    console.error('[signup] user insert failed', userErr);
-    return NextResponse.json({ error: 'Could not create provider account' }, { status: 500 });
+  // 3. Create organization
+  const trialEndsAt = new Date();
+  trialEndsAt.setDate(trialEndsAt.getDate() + 30); // 30-day trial
+
+  const { data: org, error: orgErr } = await admin
+    .from('organizations')
+    .insert({
+      name: body.practice_name,
+      phone: body.practice_phone ?? null,
+      timezone: body.practice_timezone,
+      plan: 'trial',
+      trial_ends_at: trialEndsAt.toISOString(),
+      sms_from_name: body.practice_name,
+    })
+    .select('id')
+    .single();
+
+  if (orgErr || !org) {
+    console.error('[signup] org create failed', orgErr);
+    // Roll back auth user
+    await admin.auth.admin.deleteUser(userId).catch(() => {});
+    return NextResponse.json({ error: 'Could not create practice', details: orgErr?.message }, { status: 500 });
   }
 
-  await admin.from('audit_logs').insert({
-    organization_id: orgId,
-    user_id: invite.user.id,
-    action: 'create',
-    resource_type: 'organization',
-    resource_id: orgId,
-    metadata: { event: 'signup', practice_name: payload.practiceName },
-  });
+  // 4. Create user profile linked to org as owner
+  const { error: profileErr } = await admin
+    .from('users')
+    .insert({
+      id: userId,
+      organization_id: org.id,
+      email: body.email.toLowerCase(),
+      full_name: body.full_name,
+      credentials: body.credentials ?? null,
+      npi: body.npi ?? null,
+      role: 'owner',
+      is_active: true,
+    });
 
-  return NextResponse.json({ ok: true, organizationId: orgId });
+  if (profileErr) {
+    console.error('[signup] profile create failed', profileErr);
+    // Roll back org + auth user
+    await admin.from('organizations').delete().eq('id', org.id).catch(() => {});
+    await admin.auth.admin.deleteUser(userId).catch(() => {});
+    return NextResponse.json({ error: 'Could not create profile', details: profileErr.message }, { status: 500 });
+  }
+
+  // 5. onboarding_state row is auto-created by trigger from 0008 migration
+
+  return NextResponse.json({
+    ok: true,
+    organization_id: org.id,
+    user_id: userId,
+    trial_ends_at: trialEndsAt.toISOString(),
+  });
 }
