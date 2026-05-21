@@ -2,12 +2,13 @@ import { createClient } from '@/lib/supabase/server';
 import { calculateAge, diabetesTypeLabel, formatDate, a1cBand } from '@/lib/utils';
 import { logAudit } from '@/lib/audit';
 import { notFound } from 'next/navigation';
-import { ArrowLeft, FileText, Mic, TrendingUp, TrendingDown, Minus } from 'lucide-react';
+import { ArrowLeft, FileText, Mic, Pencil, FlaskConical, TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import Link from 'next/link';
 import { A1cSparkline } from '@/components/charts/a1c-sparkline';
 import { A1cTrendChart } from '@/components/charts/a1c-trend-chart';
 import { GlucoseDashboard } from '@/components/charts/glucose-dashboard';
 import { AlertsPanel } from '@/components/cgm/alerts-panel';
+import { PatientActionsBar } from './patient-actions-bar';
 import { rangePreset } from '@/lib/cgm/analytics';
 
 export const metadata = { title: 'Patient' };
@@ -112,20 +113,13 @@ export default async function PatientDetailPage({ params }: { params: { id: stri
               {(patient.primary_provider as any).credentials && (<span> · {(patient.primary_provider as any).credentials}</span>)}
             </p>
           )}
+          {patient.phone_mobile && !patient.sms_consent && (
+            <p className="text-xs text-amber-700 dark:text-amber-300">
+              No SMS consent on file. <Link href={`/app/patients/${patient.id}/edit`} className="underline">Capture consent</Link> to enable reminders.
+            </p>
+          )}
         </div>
-        <div className="flex items-center gap-3 flex-wrap">
-          <Link href={`/app/patients/${patient.id}/labs`} className="inline-flex items-center gap-2 h-10 px-4 rounded-full border border-input bg-card text-sm font-medium hover:bg-muted transition-colors">
-            All labs
-          </Link>
-          <Link href={`/app/scribe/new?patient=${patient.id}`} className="inline-flex items-center gap-2 h-10 px-4 rounded-full border border-accent/30 bg-accent/5 text-accent text-sm font-medium hover:bg-accent/10 transition-colors">
-            <Mic className="h-4 w-4" />
-            AI Scribe
-          </Link>
-          <Link href={`/app/encounters/new?patient=${patient.id}`} className="inline-flex items-center gap-2 h-10 px-5 rounded-full bg-primary text-primary-foreground text-sm font-medium hover:bg-accent transition-colors">
-            <FileText className="h-4 w-4" />
-            New encounter
-          </Link>
-        </div>
+        <PatientActionsBar patientId={patient.id} />
       </header>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

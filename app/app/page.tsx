@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server';
 import { formatDateTime } from '@/lib/utils';
 import { Calendar, Users, FileText, Activity } from 'lucide-react';
 import Link from 'next/link';
+import { OnboardingChecklist } from '@/components/app/onboarding-checklist';
 
 export const metadata = { title: 'Dashboard' };
 
@@ -16,6 +17,8 @@ export default async function DashboardPage() {
   const [
     { count: patientCount },
     { count: weekAppts },
+    { count: pendingNotes },
+    { count: activeAlerts },
     { data: todayAppts },
     { data: recentEncounters },
   ] = await Promise.all([
@@ -27,8 +30,17 @@ export default async function DashboardPage() {
       .lt('starts_at', new Date(todayStart.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString())
       .is('deleted_at', null),
     supabase
+      .from('encounters')
+      .select('*', { count: 'exact', head: true })
+      .eq('status', 'in_progress')
+      .is('deleted_at', null),
+    supabase
+      .from('cgm_alerts')
+      .select('*', { count: 'exact', head: true })
+      .is('resolved_at', null),
+    supabase
       .from('appointments')
-      .select('id, starts_at, ends_at, encounter_type, reason, status, patients(id, first_name, last_name, mrn)')
+      .select('id, starts_at, ends_at, appointment_type, reason, status, patients(id, first_name, last_name, mrn)')
       .gte('starts_at', todayStart.toISOString())
       .lte('starts_at', todayEnd.toISOString())
       .is('deleted_at', null)
@@ -51,11 +63,13 @@ export default async function DashboardPage() {
         </p>
       </header>
 
+      <OnboardingChecklist />
+
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard icon={Users} label="Active patients" value={patientCount ?? 0} href="/app/patients" />
         <StatCard icon={Calendar} label="Appointments this week" value={weekAppts ?? 0} href="/app/schedule" />
-        <StatCard icon={FileText} label="Notes pending signature" value={0} href="/app/encounters?status=draft" />
-        <StatCard icon={Activity} label="CGM alerts" value={0} href="/app/cgm" tone="accent" />
+        <StatCard icon={FileText} label="Notes in progress" value={pendingNotes ?? 0} href="/app/encounters?status=in_progress" />
+        <StatCard icon={Activity} label="CGM alerts" value={activeAlerts ?? 0} href="/app/cgm" tone="accent" />
       </div>
 
       <section className="bg-card rounded-2xl border border-border">
@@ -64,7 +78,7 @@ export default async function DashboardPage() {
           <Link href="/app/schedule" className="text-xs font-mono uppercase tracking-wider text-muted-foreground hover:text-foreground">View all →</Link>
         </header>
         {(!todayAppts || todayAppts.length === 0) ? (
-          <EmptyState title="No appointments scheduled today" cta={{ label: 'Schedule an appointment', href: '/app/schedule/new' }} />
+          <EmptyState title="No appointments scheduled today" cta={{ label: 'Open schedule', href: '/app/schedule' }} />
         ) : (
           <ul className="divide-y divide-border">
             {todayAppts.map((a: any) => (
@@ -74,13 +88,13 @@ export default async function DashboardPage() {
                     {new Date(a.starts_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
                   </div>
                   <div>
-                    <Link href={`/app/patients/${a.patients?.id}`} className="font-medium hover:text-accent">
+                    <Link href={`/app/schedule/${a.id}`} className="font-medium hover:text-accent">
                       {a.patients?.first_name} {a.patients?.last_name}
                     </Link>
-                    <div className="text-xs text-muted-foreground">MRN {a.patients?.mrn} · {a.reason ?? a.encounter_type}</div>
+                    <div className="text-xs text-muted-foreground">MRN {a.patients?.mrn} · {a.reason ?? a.appointment_type?.replace(/_/g, ' ')}</div>
                   </div>
                 </div>
-                <span className="clinical-badge clinical-badge-good capitalize">{a.status}</span>
+                <span className="clinical-badge clinical-badge-good capitalize">{a.status?.replace('_', ' ')}</span>
               </li>
             ))}
           </ul>
@@ -102,7 +116,7 @@ export default async function DashboardPage() {
                   <div className="font-medium capitalize">{e.encounter_type.replace('_', ' ')}</div>
                   <div className="text-xs text-muted-foreground">{e.patients?.first_name} {e.patients?.last_name} · {formatDateTime(e.signed_at)}</div>
                 </div>
-                <span className={`clinical-badge ${e.status === 'signed' ? 'clinical-badge-good' : 'clinical-badge-borderline'} capitalize`}>{e.status}</span>
+                <span className={`clinical-badge ${e.status === 'signed' ? 'clinical-badge-good' : 'clinical-badge-borderline'} capitalize`}>{e.status?.replace('_', ' ')}</span>
               </li>
             ))}
           </ul>
