@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LayoutDashboard, Users, Calendar, FileText, Activity, Settings, Mic, FlaskConical, Inbox } from 'lucide-react';
+import { LayoutDashboard, Users, Calendar, FileText, Activity, Settings, Mic, FlaskConical, Inbox, BarChart3 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { cn } from '@/lib/utils';
 
@@ -15,6 +15,7 @@ const nav = [
   { label: 'Labs', href: '/app/labs', icon: FlaskConical },
   { label: 'CGM', href: '/app/cgm', icon: Activity },
   { label: 'AI Scribe', href: '/app/scribe', icon: Mic },
+  { label: 'Reports', href: '/app/reports', icon: BarChart3 },
 ];
 
 export function Sidebar({ profile }: { profile: any }) {
