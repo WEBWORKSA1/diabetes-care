@@ -2,22 +2,39 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LayoutDashboard, Users, Calendar, FileText, Activity, Settings, Mic, FlaskConical } from 'lucide-react';
+import { LayoutDashboard, Users, Calendar, FileText, Activity, Settings, Mic, FlaskConical, Inbox } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { cn } from '@/lib/utils';
 
 const nav = [
   { label: 'Today', href: '/app', icon: LayoutDashboard, exact: true },
+  { label: 'Inbox', href: '/app/inbox', icon: Inbox, countKey: 'total_pending' as const },
   { label: 'Patients', href: '/app/patients', icon: Users },
   { label: 'Schedule', href: '/app/schedule', icon: Calendar },
   { label: 'Encounters', href: '/app/encounters', icon: FileText },
   { label: 'Labs', href: '/app/labs', icon: FlaskConical },
   { label: 'CGM', href: '/app/cgm', icon: Activity },
-  { label: 'AI Scribe', href: '/app/scribe', icon: Mic, badge: 'New' },
+  { label: 'AI Scribe', href: '/app/scribe', icon: Mic },
 ];
 
 export function Sidebar({ profile }: { profile: any }) {
   const pathname = usePathname();
   const org = profile.organizations;
+  const [counts, setCounts] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    fetch('/api/inbox?filter=mine')
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.counts) {
+          setCounts({
+            total_pending: d.counts.total_pending ?? 0,
+            critical_total: d.counts.critical_total ?? 0,
+          });
+        }
+      })
+      .catch(() => {});
+  }, [pathname]);
 
   return (
     <aside className="hidden lg:flex w-64 flex-col bg-card border-r border-border">
@@ -31,6 +48,9 @@ export function Sidebar({ profile }: { profile: any }) {
       <nav className="flex-1 px-3 py-4 space-y-0.5">
         {nav.map((item) => {
           const isActive = item.exact ? pathname === item.href : pathname.startsWith(item.href);
+          const count = item.countKey ? counts[item.countKey] : null;
+          const showBadge = count !== null && count !== undefined && count > 0;
+          const isCriticalCount = item.countKey === 'total_pending' && (counts.critical_total ?? 0) > 0;
           return (
             <Link
               key={item.href}
@@ -44,12 +64,16 @@ export function Sidebar({ profile }: { profile: any }) {
                 <item.icon className="h-4 w-4" />
                 {item.label}
               </span>
-              {item.badge && (
+              {showBadge && (
                 <span className={cn(
-                  'text-[10px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded',
-                  isActive ? 'bg-primary-foreground/20' : 'bg-accent/10 text-accent'
+                  'text-[10px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded tabular-nums',
+                  isActive
+                    ? 'bg-primary-foreground/20'
+                    : isCriticalCount
+                      ? 'bg-red-100 text-red-900 dark:bg-red-950 dark:text-red-100'
+                      : 'bg-accent/10 text-accent'
                 )}>
-                  {item.badge}
+                  {count}
                 </span>
               )}
             </Link>

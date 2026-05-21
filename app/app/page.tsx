@@ -1,154 +1,127 @@
 import { createClient } from '@/lib/supabase/server';
-import { formatDateTime } from '@/lib/utils';
-import { Calendar, Users, FileText, Activity } from 'lucide-react';
+import { redirect } from 'next/navigation';
 import Link from 'next/link';
+import { Inbox, Calendar, Users } from 'lucide-react';
+import { InboxView } from '@/components/inbox/inbox-view';
 import { OnboardingChecklist } from '@/components/app/onboarding-checklist';
+import { formatDateTime } from '@/lib/utils';
 
-export const metadata = { title: 'Dashboard' };
+export const metadata = { title: 'Today' };
 
 export default async function DashboardPage() {
   const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect('/login');
 
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
-  const todayEnd = new Date();
-  todayEnd.setHours(23, 59, 59, 999);
+  const { data: profile } = await supabase
+    .from('users')
+    .select('id, full_name, role, organization_id, inbox_filter_default, inbox_layout')
+    .eq('id', user.id)
+    .single();
+  if (!profile) redirect('/login');
 
-  const [
-    { count: patientCount },
-    { count: weekAppts },
-    { count: pendingNotes },
-    { count: activeAlerts },
-    { data: todayAppts },
-    { data: recentEncounters },
-  ] = await Promise.all([
-    supabase.from('patients').select('*', { count: 'exact', head: true }).is('deleted_at', null),
-    supabase
-      .from('appointments')
-      .select('*', { count: 'exact', head: true })
-      .gte('starts_at', todayStart.toISOString())
-      .lt('starts_at', new Date(todayStart.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString())
-      .is('deleted_at', null),
-    supabase
-      .from('encounters')
-      .select('*', { count: 'exact', head: true })
-      .eq('status', 'in_progress')
-      .is('deleted_at', null),
-    supabase
-      .from('cgm_alerts')
-      .select('*', { count: 'exact', head: true })
-      .is('resolved_at', null),
-    supabase
-      .from('appointments')
-      .select('id, starts_at, ends_at, appointment_type, reason, status, patients(id, first_name, last_name, mrn)')
-      .gte('starts_at', todayStart.toISOString())
-      .lte('starts_at', todayEnd.toISOString())
-      .is('deleted_at', null)
-      .order('starts_at', { ascending: true })
-      .limit(8),
-    supabase
-      .from('encounters')
-      .select('id, encounter_type, status, signed_at, patients(id, first_name, last_name)')
-      .is('deleted_at', null)
-      .order('updated_at', { ascending: false })
-      .limit(5),
-  ]);
+  const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+  const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
+
+  const { data: todayAppts } = await supabase
+    .from('appointments')
+    .select('id, starts_at, ends_at, appointment_type, reason, status, patients(id, first_name, last_name, mrn), provider:users!appointments_provider_id_fkey(id, full_name)')
+    .gte('starts_at', todayStart.toISOString())
+    .lte('starts_at', todayEnd.toISOString())
+    .is('deleted_at', null)
+    .order('starts_at', { ascending: true })
+    .limit(20);
+
+  const greeting = (() => {
+    const h = new Date().getHours();
+    if (h < 12) return 'Good morning';
+    if (h < 17) return 'Good afternoon';
+    return 'Good evening';
+  })();
+  const firstName = profile.full_name?.split(' ')[0] ?? '';
 
   return (
     <div className="space-y-8">
       <header className="space-y-1">
-        <h1 className="font-display text-3xl tracking-tight">Today</h1>
         <p className="text-sm text-muted-foreground">
           {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
         </p>
+        <h1 className="font-display text-3xl tracking-tight">{greeting}{firstName ? `, ${firstName}` : ''}.</h1>
       </header>
 
       <OnboardingChecklist />
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard icon={Users} label="Active patients" value={patientCount ?? 0} href="/app/patients" />
-        <StatCard icon={Calendar} label="Appointments this week" value={weekAppts ?? 0} href="/app/schedule" />
-        <StatCard icon={FileText} label="Notes in progress" value={pendingNotes ?? 0} href="/app/encounters?status=in_progress" />
-        <StatCard icon={Activity} label="CGM alerts" value={activeAlerts ?? 0} href="/app/cgm" tone="accent" />
-      </div>
+      <section>
+        <header className="flex items-center justify-between mb-4">
+          <h2 className="font-display text-xl flex items-center gap-2">
+            <Inbox className="h-4 w-4 text-muted-foreground" /> Inbox
+          </h2>
+          <Link href="/app/inbox" className="text-xs font-mono uppercase tracking-wider text-muted-foreground hover:text-foreground">
+            Open inbox →
+          </Link>
+        </header>
+        <InboxView
+          initialFilter={(profile.inbox_filter_default ?? 'mine') as any}
+          initialLayout={(profile.inbox_layout ?? 'sections') as any}
+          isOwner={profile.role === 'owner'}
+          hideUnified
+        />
+      </section>
 
       <section className="bg-card rounded-2xl border border-border">
         <header className="flex items-center justify-between px-6 py-5 border-b border-border">
-          <h2 className="font-display text-xl">Today&rsquo;s schedule</h2>
-          <Link href="/app/schedule" className="text-xs font-mono uppercase tracking-wider text-muted-foreground hover:text-foreground">View all →</Link>
+          <h2 className="font-display text-xl flex items-center gap-2">
+            <Calendar className="h-4 w-4 text-muted-foreground" /> Today&rsquo;s schedule
+          </h2>
+          <Link href="/app/schedule" className="text-xs font-mono uppercase tracking-wider text-muted-foreground hover:text-foreground">
+            Open schedule →
+          </Link>
         </header>
         {(!todayAppts || todayAppts.length === 0) ? (
-          <EmptyState title="No appointments scheduled today" cta={{ label: 'Open schedule', href: '/app/schedule' }} />
+          <div className="px-6 py-12 text-center">
+            <p className="font-display text-lg">No appointments today</p>
+            <p className="text-sm text-muted-foreground mt-1">Enjoy the quiet day.</p>
+          </div>
         ) : (
           <ul className="divide-y divide-border">
-            {todayAppts.map((a: any) => (
-              <li key={a.id} className="px-6 py-4 flex items-center justify-between gap-4 hover:bg-muted/30 transition-colors">
-                <div className="flex items-center gap-4">
-                  <div className="font-mono text-sm tabular-nums w-16">
-                    {new Date(a.starts_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
-                  </div>
-                  <div>
-                    <Link href={`/app/schedule/${a.id}`} className="font-medium hover:text-accent">
-                      {a.patients?.first_name} {a.patients?.last_name}
-                    </Link>
-                    <div className="text-xs text-muted-foreground">MRN {a.patients?.mrn} · {a.reason ?? a.appointment_type?.replace(/_/g, ' ')}</div>
-                  </div>
-                </div>
-                <span className="clinical-badge clinical-badge-good capitalize">{a.status?.replace('_', ' ')}</span>
-              </li>
-            ))}
+            {todayAppts.map((a: any) => {
+              const start = new Date(a.starts_at);
+              const isPast = start.getTime() < Date.now() && a.status !== 'in_progress';
+              return (
+                <li key={a.id}>
+                  <Link
+                    href={`/app/schedule/${a.id}`}
+                    className={`block px-6 py-4 hover:bg-muted/30 transition-colors ${isPast && a.status !== 'completed' ? 'opacity-60' : ''}`}
+                  >
+                    <div className="flex items-center justify-between gap-4 flex-wrap">
+                      <div className="flex items-center gap-4 min-w-0">
+                        <div className="font-mono text-sm tabular-nums w-16 shrink-0">
+                          {start.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="font-medium truncate">{a.patients?.first_name} {a.patients?.last_name}</div>
+                          <div className="text-xs text-muted-foreground truncate">
+                            MRN {a.patients?.mrn} · {a.reason ?? String(a.appointment_type).replace(/_/g, ' ')}
+                            {profile.role === 'owner' && a.provider && (
+                              <span> · {a.provider.full_name}</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                      <span className={`clinical-badge clinical-badge-${
+                        a.status === 'completed' ? 'good' :
+                        a.status === 'cancelled' || a.status === 'no_show' ? 'high' :
+                        a.status === 'arrived' || a.status === 'in_progress' ? 'borderline' :
+                        'borderline'
+                      } capitalize shrink-0`}>{String(a.status).replace('_', ' ')}</span>
+                    </div>
+                  </Link>
+                </li>
+              );
+            })}
           </ul>
         )}
       </section>
-
-      <section className="bg-card rounded-2xl border border-border">
-        <header className="flex items-center justify-between px-6 py-5 border-b border-border">
-          <h2 className="font-display text-xl">Recent encounters</h2>
-          <Link href="/app/encounters" className="text-xs font-mono uppercase tracking-wider text-muted-foreground hover:text-foreground">View all →</Link>
-        </header>
-        {(!recentEncounters || recentEncounters.length === 0) ? (
-          <EmptyState title="No encounters yet" subtitle="Encounters will appear here once you start charting." />
-        ) : (
-          <ul className="divide-y divide-border">
-            {recentEncounters.map((e: any) => (
-              <li key={e.id} className="px-6 py-4 flex items-center justify-between hover:bg-muted/30 transition-colors">
-                <div>
-                  <div className="font-medium capitalize">{e.encounter_type.replace('_', ' ')}</div>
-                  <div className="text-xs text-muted-foreground">{e.patients?.first_name} {e.patients?.last_name} · {formatDateTime(e.signed_at)}</div>
-                </div>
-                <span className={`clinical-badge ${e.status === 'signed' ? 'clinical-badge-good' : 'clinical-badge-borderline'} capitalize`}>{e.status?.replace('_', ' ')}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-    </div>
-  );
-}
-
-function StatCard({ icon: Icon, label, value, href, tone = 'default' }: { icon: any; label: string; value: number | string; href: string; tone?: 'default' | 'accent' }) {
-  return (
-    <Link href={href} className="bg-card rounded-2xl border border-border p-5 hover:border-foreground/30 transition-colors group">
-      <div className="flex items-center justify-between mb-3">
-        <div className={`p-2 rounded-lg ${tone === 'accent' ? 'bg-accent/10 text-accent' : 'bg-muted text-muted-foreground'}`}>
-          <Icon className="h-4 w-4" />
-        </div>
-        <span className="text-xs font-mono uppercase tracking-wider text-muted-foreground group-hover:text-foreground transition-colors">→</span>
-      </div>
-      <div className="font-display text-3xl tabular-nums">{value}</div>
-      <div className="text-xs text-muted-foreground mt-1">{label}</div>
-    </Link>
-  );
-}
-
-function EmptyState({ title, subtitle, cta }: { title: string; subtitle?: string; cta?: { label: string; href: string } }) {
-  return (
-    <div className="px-6 py-12 text-center">
-      <p className="font-display text-lg">{title}</p>
-      {subtitle && <p className="text-sm text-muted-foreground mt-1">{subtitle}</p>}
-      {cta && (
-        <Link href={cta.href} className="inline-block mt-4 text-sm font-medium underline-offset-4 hover:underline">{cta.label} →</Link>
-      )}
     </div>
   );
 }
